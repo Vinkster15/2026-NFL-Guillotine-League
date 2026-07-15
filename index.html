@@ -235,6 +235,31 @@
       font-size: 0.65rem;
     }
 
+    /* Locked — user already claimed a spot */
+    .spot-card.locked {
+      opacity: 0.38;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .spot-card.locked:hover { transform: none; box-shadow: none; }
+
+    /* "You're in" banner */
+    .signed-up-banner {
+      background: linear-gradient(135deg, rgba(34,197,94,0.12), rgba(34,197,94,0.06));
+      border: 1px solid rgba(34,197,94,0.3);
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin-bottom: 16px;
+      font-size: 0.88rem;
+      color: var(--green);
+      font-weight: 600;
+      display: none;
+      align-items: center;
+      gap: 10px;
+    }
+    .signed-up-banner.show { display: flex; }
+    .signed-up-banner strong { color: #fff; }
+
     /* shimmer on available cards */
     .spot-card.available::before {
       content: '';
@@ -472,6 +497,9 @@
 
 <!-- Spots Grid -->
 <section class="spots-section">
+  <div class="signed-up-banner" id="signed-up-banner">
+    ✅ <span id="signed-up-text">You're signed up!</span>
+  </div>
   <div class="spots-grid" id="spots-grid">
     <div class="loading-state">
       <div class="spinner"></div>
@@ -502,9 +530,9 @@
       <div class="form-hint">Used only to contact you when the league goes live.</div>
     </div>
     <div class="form-group">
-      <label class="form-label" for="claim-pin">Create a PIN *</label>
-      <input class="form-input" type="password" id="claim-pin" placeholder="Choose any PIN (4+ chars)" autocomplete="new-password" />
-      <div class="form-hint">Remember this — you'll need it to unclaim your spot.</div>
+      <label class="form-label" for="claim-pin">Create a 4-Digit PIN *</label>
+      <input class="form-input" type="password" id="claim-pin" placeholder="e.g. 1234" autocomplete="new-password" maxlength="4" inputmode="numeric" pattern="\d{4}" />
+      <div class="form-hint">Numbers only, exactly 4 digits. You'll need this to release your spot.</div>
     </div>
     <div class="modal-actions">
       <button class="btn-primary" id="claim-submit" onclick="submitClaim()">Claim Spot ⚔️</button>
@@ -534,49 +562,88 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  // ─────────────────────────────────────────────
-  // PASTE YOUR APPS SCRIPT URL HERE AFTER DEPLOY
-  // ─────────────────────────────────────────────
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbyKtYR8enNHTXAcVd3xZA6768rzRZ2yq7k_HzOVyMf4UX24YjYnviUEhxN8lLEf4Y0/exec';
-
+  const GAS_URL     = 'https://script.google.com/macros/s/AKfycbyKtYR8enNHTXAcVd3xZA6768rzRZ2yq7k_HzOVyMf4UX24YjYnviUEhxN8lLEf4Y0/exec';
   const TOTAL_SPOTS = 18;
-  let claims = {};       // { spotNum: { name, timestamp } }
-  let activeSpot = null; // currently selected spot number
+  const STORAGE_KEY = 'guill_2026_claimed'; // shared with hub page (same GitHub Pages origin)
+
+  let claims     = {};   // { "1": {name, timestamp}, ... }
+  let activeSpot = null;
+  let myClaim    = null; // { spot, name } — set if this browser already claimed
 
   // ── Boot ──
   window.addEventListener('DOMContentLoaded', loadClaims);
 
+  // ── LocalStorage helpers ──
+  function loadMyClaimFromStorage() {
+    try {
+      const s = localStorage.getItem(STORAGE_KEY);
+      myClaim = s ? JSON.parse(s) : null;
+    } catch(e) { myClaim = null; }
+  }
+  function saveMyClaimToStorage(spot, name) {
+    myClaim = { spot, name };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(myClaim));
+  }
+  function clearMyClaimFromStorage() {
+    myClaim = null;
+    localStorage.removeItem(STORAGE_KEY);
+  }
+
+  // ── Fetch claims ──
   async function loadClaims() {
+    loadMyClaimFromStorage();
     try {
       const res  = await fetch(`${GAS_URL}?action=claims`);
       const data = await res.json();
-      if (data.success && data.claims) {
-        claims = data.claims; // { "1": {name, timestamp}, ... }
-      }
-    } catch (e) {
-      claims = {};
-    }
+      if (data.success && data.claims) claims = data.claims;
+    } catch (e) { claims = {}; }
     renderGrid();
     updateCounter();
   }
 
-  // ── Render ──
+  // ── Render grid ──
   function renderGrid() {
+    // Show/hide "You're in" banner
+    const banner = document.getElementById('signed-up-banner');
+    if (myClaim) {
+      document.getElementById('signed-up-text').innerHTML =
+        `You're signed up! <strong>Spot #${myClaim.spot}</strong> is yours, <strong>${esc(myClaim.name)}</strong>. Click your spot to release it.`;
+      banner.classList.add('show');
+    } else {
+      banner.classList.remove('show');
+    }
+
     const grid = document.getElementById('spots-grid');
     grid.innerHTML = '';
+
     for (let i = 1; i <= TOTAL_SPOTS; i++) {
-      const c = claims[String(i)];
-      const card = document.createElement('div');
-      card.className = `spot-card ${c ? 'claimed' : 'available'}`;
+      const c        = claims[String(i)];
+      const isMySpot = myClaim && Number(myClaim.spot) === i;
+      const card     = document.createElement('div');
+
       if (c) {
+        // ── Claimed spot ──
+        card.className = 'spot-card claimed';
         card.innerHTML = `
           <div class="spot-num">Spot #${i}</div>
           <span class="spot-sword">⚔️</span>
           <div class="spot-status-label">Claimed</div>
           <div class="spot-name">${esc(c.name)}</div>
-          <div class="spot-cta">tap to release</div>`;
+          <div class="spot-cta">${isMySpot ? 'tap to release' : 'tap to release'}</div>`;
         card.onclick = () => openRelease(i, c.name);
+
+      } else if (myClaim && !isMySpot) {
+        // ── Available but this user already has a spot — locked ──
+        card.className = 'spot-card available locked';
+        card.innerHTML = `
+          <div class="spot-num">Spot #${i}</div>
+          <span class="spot-sword" style="opacity:.2">⚔️</span>
+          <div class="spot-status-label">Available</div>
+          <div class="spot-cta" style="color:var(--muted)">Locked</div>`;
+
       } else {
+        // ── Open — can be claimed ──
+        card.className = 'spot-card available';
         card.innerHTML = `
           <div class="spot-num">Spot #${i}</div>
           <span class="spot-sword" style="opacity:.35">⚔️</span>
@@ -584,23 +651,27 @@
           <div class="spot-cta">+ Claim</div>`;
         card.onclick = () => openClaim(i);
       }
+
       grid.appendChild(card);
     }
   }
 
   function updateCounter() {
     const claimed = Object.keys(claims).length;
-    const open = TOTAL_SPOTS - claimed;
+    const open    = TOTAL_SPOTS - claimed;
     document.getElementById('open-count').textContent = open;
     document.getElementById('counter-right').textContent =
       claimed === 0 ? 'Be the first to claim a spot!'
       : `${claimed} spot${claimed !== 1 ? 's' : ''} claimed`;
-    const pct = (claimed / TOTAL_SPOTS) * 100;
-    document.getElementById('fill-bar').style.width = pct + '%';
+    document.getElementById('fill-bar').style.width = (claimed / TOTAL_SPOTS * 100) + '%';
   }
 
   // ── Claim modal ──
   window.openClaim = function(spot) {
+    if (myClaim) {
+      showToast(`You've already claimed Spot #${myClaim.spot}!`, 'error');
+      return;
+    }
     activeSpot = spot;
     document.getElementById('claim-title').textContent = `Claim Spot #${spot}`;
     document.getElementById('claim-name').value  = '';
@@ -618,18 +689,19 @@
 
     if (!name)  { showError('claim', 'Please enter your name.'); return; }
     if (!email || !email.includes('@')) { showError('claim', 'Please enter a valid email.'); return; }
-    if (pin.length < 4) { showError('claim', 'PIN must be at least 4 characters.'); return; }
+    if (!/^\d{4}$/.test(pin)) { showError('claim', 'PIN must be exactly 4 digits (numbers only).'); return; }
 
     const btn = document.getElementById('claim-submit');
     btn.disabled = true;
     btn.textContent = 'Claiming…';
 
     try {
-      const url = `${GAS_URL}?action=claim&spot=${activeSpot}&name=${enc(name)}&email=${enc(email)}&pin=${enc(pin)}`;
+      const url  = `${GAS_URL}?action=claim&spot=${activeSpot}&name=${enc(name)}&email=${enc(email)}&pin=${enc(pin)}`;
       const res  = await fetch(url);
       const data = await res.json();
       if (data.success) {
         claims[String(activeSpot)] = { name, timestamp: new Date().toISOString() };
+        saveMyClaimToStorage(activeSpot, name);
         closeModal('claim');
         renderGrid();
         updateCounter();
@@ -649,7 +721,7 @@
   window.openRelease = function(spot, name) {
     activeSpot = spot;
     document.getElementById('release-title').textContent = `Release Spot #${spot}`;
-    document.getElementById('release-sub').textContent  = `Claimed by ${name}. Enter your PIN to release this spot.`;
+    document.getElementById('release-sub').textContent   = `Claimed by ${name}. Enter your 4-digit PIN to release this spot.`;
     document.getElementById('release-pin').value = '';
     hideError('release');
     document.getElementById('release-overlay').classList.add('open');
@@ -665,10 +737,12 @@
     btn.textContent = 'Releasing…';
 
     try {
-      const url = `${GAS_URL}?action=release&spot=${activeSpot}&pin=${enc(pin)}`;
+      const url  = `${GAS_URL}?action=release&spot=${activeSpot}&pin=${enc(pin)}`;
       const res  = await fetch(url);
       const data = await res.json();
       if (data.success) {
+        // If this was the user's own spot, clear their localStorage claim
+        if (myClaim && Number(myClaim.spot) === activeSpot) clearMyClaimFromStorage();
         delete claims[String(activeSpot)];
         closeModal('release');
         renderGrid();
@@ -690,11 +764,9 @@
     document.getElementById(`${which}-overlay`).classList.remove('open');
     activeSpot = null;
   };
-  // Close on backdrop click
   document.querySelectorAll('.modal-overlay').forEach(el => {
     el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
   });
-  // Close on Escape
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(el => el.classList.remove('open'));
   });
@@ -722,7 +794,6 @@
   }
   function enc(str) { return encodeURIComponent(str); }
 
-  // Enter key submits
   ['claim-name','claim-email','claim-pin'].forEach(id => {
     document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') submitClaim(); });
   });
